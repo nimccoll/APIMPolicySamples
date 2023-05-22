@@ -1,0 +1,82 @@
+<!--
+    IMPORTANT:
+    - Policy elements can appear only within the <inbound>, <outbound>, <backend> section elements.
+    - To apply a policy to the incoming request (before it is forwarded to the backend service), place a corresponding policy element within the <inbound> section element.
+    - To apply a policy to the outgoing response (before it is sent back to the caller), place a corresponding policy element within the <outbound> section element.
+    - To add a policy, place the cursor at the desired insertion point and select a policy from the sidebar.
+    - To remove a policy, delete the corresponding policy statement from the policy document.
+    - Position the <base> element within a section element to inherit all policies from the corresponding section element in the enclosing scope.
+    - Remove the <base> element to prevent inheriting policies from the corresponding section element in the enclosing scope.
+    - Policies are applied in the order of their appearance, from the top down.
+    - Comments within policy elements are not supported and may disappear. Place your comments between policy elements or at a higher level scope.
+-->
+<policies>
+    <inbound>
+        <base />
+    </inbound>
+    <backend>
+        <base />
+    </backend>
+    <outbound>
+        <base />
+        <send-request mode="new" response-variable-name="contactResponse" timeout="20" ignore-error="false">
+            <set-url>https://nimccollfta-samplealgorithm.azurewebsites.net/api/contact</set-url>
+            <set-method>GET</set-method>
+        </send-request>
+        <set-variable name="contactXml" value="@(((IResponse)context.Variables["contactResponse"]).Body.As<string>())" />
+        <send-request mode="new" response-variable-name="personalResponse" timeout="20" ignore-error="false">
+            <set-url>https://nimccollfta-samplealgorithm.azurewebsites.net/api/personal</set-url>
+            <set-method>GET</set-method>
+        </send-request>
+        <set-variable name="personalXml" value="@(((IResponse)context.Variables["personalResponse"]).Body.As<string>())" />
+        <set-variable name="basicXml" value="@(context.Response.Body.As<string>())" />
+        <set-body template="none">@{
+            XDocument basicDocument = XDocument.Parse(context.Variables.GetValueOrDefault("basicXml", ""));
+            XDocument contactDocument = XDocument.Parse(context.Variables.GetValueOrDefault("contactXml", ""));
+            XDocument personalDocument = XDocument.Parse(context.Variables.GetValueOrDefault("personalXml", ""));
+            XDocument outputDocument = new XDocument(new XElement("Report_Data"));
+            XElement outputReportData = outputDocument.Descendants("Report_Data").FirstOrDefault();
+
+            List<XElement> employeeIds = new List<XElement>();
+            List<XElement> reportEntries = basicDocument.Descendants("Report_Entry").ToList();
+            foreach (XElement reportEntry in reportEntries)
+            {
+                XElement employeeId = reportEntry.Descendants("Employee_ID").FirstOrDefault();
+                if (employeeId != null)
+                {
+                  employeeIds.Add(employeeId);
+                }
+            }
+            foreach (XElement employeeId in employeeIds)
+            {
+                List<XElement> basic = basicDocument.Descendants("Report_Entry").Where(r => r.Element("Employee_ID").Value == employeeId.Value).ToList();
+                if (basic.Count == 1)
+                {
+                    basic[0].Add(XElement.Parse("<Report_Data></Report_Data>"));
+                    XElement reportData = basic[0].Descendants("Report_Data").FirstOrDefault();
+                    if (reportData != null)
+                    {
+                        List<XElement> contacts = contactDocument.Descendants("Report_Entry").Where(r => r.Element("Employee_ID").Value == employeeId.Value).ToList();
+                        if (contacts.Count > 0)
+                        {
+                            reportData.Add(contacts);
+                        }
+                        List<XElement> personal = personalDocument.Descendants("Report_Entry").Where(r => r.Element("Employee_ID").Value == employeeId.Value).ToList();
+                        if (personal.Count > 0)
+                        {
+                            reportData.Add(personal);
+                        }                        
+                    }
+                    if (outputReportData != null)
+                    {
+                        outputReportData.Add(basic[0]);
+                    }
+                }
+            }
+            return outputDocument.ToString();
+        }</set-body>
+    </outbound>
+    <on-error>
+        <base />
+    </on-error>
+</policies>
